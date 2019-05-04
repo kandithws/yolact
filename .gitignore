@@ -157,4 +157,5 @@ run_docker.sh
 run_grpc_server.sh
 .nv
 .config
+.bash_history
 

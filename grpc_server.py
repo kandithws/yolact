@@ -8,7 +8,7 @@ from concurrent import futures
 import numpy as np
 from yolact import Yolact
 from utils.augmentations import FastBaseTransform
-from layers.output_utils import postprocess_custom, upscale_masks
+from layers.output_utils import postprocess, postprocess_custom, upscale_masks
 import torch
 import torch.backends.cudnn as cudnn
 import argparse
@@ -66,8 +66,8 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
             print('Fail to load initial image')
             _initimg = np.zeros((640, 480, 3))
 
-        print(_initimg.shape)
         self._detect(_initimg)  # run detection once to initialize
+
         print("Done")
 
     # Image input type: BGR
@@ -96,7 +96,7 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
     def _detect(self, image):
         frame = torch.Tensor(image).cuda().float()
         batch = FastBaseTransform()(frame.unsqueeze(0))  # GPU SWAP
-        t = postprocess_custom(self._model(batch),
+        t = postprocess(self._model(batch),
                                image.shape[1],
                                image.shape[0],
                                score_threshold= self._score_threshold)
@@ -112,9 +112,6 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
                 img_numpy = (img_gpu * 255).byte().cpu().numpy()
                 return classes, scores, boxes, masks, img_numpy
 
-            # TO FIX !
-            # full_masks = masks
-            print(masks.shape)
             # Drawing mask in GPU
             for j in reversed(range(min(self._top_k, classes.shape[0]))):
                 if scores[j] >= self._score_threshold:
@@ -174,7 +171,7 @@ def main():
     )
     parser.add_argument('--model_weight', required=True,help='Path to .pth weight')
     parser.add_argument('--use_fast_nms', default=False, help='Use fast (coarse) NMS')
-    parser.add_argument('--score_threshold', default=0.0, help='Minimum Score threshold')
+    parser.add_argument('--score_threshold', default=0.3, help='Minimum Score threshold')
     parser.add_argument('--top_k', default=100, help='Total top instances to return')
     parser.add_argument('--visualize', default=True, help='Whether to run visualization window')
     parser.add_argument('--full_mask', default=True, help='Whether to get full mask, otherwise cropped')
