@@ -155,4 +155,6 @@ weights/
 .python_history
 run_docker.sh
 run_grpc_server.sh
+.nv
+.config
 

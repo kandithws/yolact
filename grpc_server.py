@@ -13,6 +13,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import argparse
 from utils.functions import SavePath
+import os
 
 _NUMPY_TYPES_MAP = {
     "uint8": np.uint8,
@@ -58,8 +59,15 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
         self._score_threshold = args.score_threshold
         self._visualize = args.visualize
         self._full_mask = args.full_mask
-        print("Initializing ..")
-        self._detect(torch.zeros(640, 480, 3) )  # run detection once to initialize
+        print("Initializing ..", end='')
+        _initimg = cv2.imread(os.path.join(os.getcwd(), 'data', 'grpc_init.png'))
+
+        if _initimg is None:
+            print('Fail to load initial image')
+            _initimg = np.zeros((640, 480, 3))
+
+        print(_initimg.shape)
+        self._detect(_initimg)  # run detection once to initialize
         print("Done")
 
     # Image input type: BGR
@@ -91,7 +99,6 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
         t = postprocess_custom(self._model(batch),
                                image.shape[1],
                                image.shape[0],
-                               get_full_mask= self._full_mask,
                                score_threshold= self._score_threshold)
         torch.cuda.synchronize()
 
@@ -99,23 +106,21 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
             masks = t[3][:self._top_k]  # mask_gpu We'll need this later
             classes, scores, boxes = [x[:self._top_k].cpu().numpy() for x in t[:3]]
 
-            img_gpu = image / 255.0
-            h, w, _ = image.shape
+            img_gpu = frame / 255.0
+            h, w, _ = frame.shape
             if classes.shape[0] == 0:
                 img_numpy = (img_gpu * 255).byte().cpu().numpy()
                 return classes, scores, boxes, masks, img_numpy
 
-            if not self._full_mask:
-                full_masks = upscale_masks(masks, w, h, boxes)
-            else:
-                full_masks = masks
-
+            # TO FIX !
+            # full_masks = masks
+            print(masks.shape)
             # Drawing mask in GPU
             for j in reversed(range(min(self._top_k, classes.shape[0]))):
                 if scores[j] >= self._score_threshold:
                     color = get_color(j, classes)
 
-                    mask = full_masks[j, :, :, None]
+                    mask = masks[j, :, :, None]
                     mask_color = mask @ (torch.Tensor(color).view(1, 3) / 255.0)
                     mask_alpha = 0.45
 
@@ -172,7 +177,7 @@ def main():
     parser.add_argument('--score_threshold', default=0.0, help='Minimum Score threshold')
     parser.add_argument('--top_k', default=100, help='Total top instances to return')
     parser.add_argument('--visualize', default=True, help='Whether to run visualization window')
-    parser.add_argument('--full_mask', default=False, help='Whether to get full mask, otherwise cropped')
+    parser.add_argument('--full_mask', default=True, help='Whether to get full mask, otherwise cropped')
     parser.add_argument('--cpu', action='store_true', help='Whether to use cpu for calc')
     parser.add_argument('--config', default=None,
                         help='The config object to use.')

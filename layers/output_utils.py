@@ -154,9 +154,7 @@ def upscale_masks(masks, w, h, boxes, interpolation_mode='bilinear'):
     return full_masks
 
 
-def postprocess_custom(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
-                       get_full_mask=True,
-                       score_threshold=0):
+def postprocess_custom(det_output, w, h, batch_idx=0, interpolation_mode='bilinear', score_threshold=0.3):
     """
     Postprocesses the output of Yolact on testing mode into a format that makes sense,
     accounting for all the possible configuration settings.
@@ -220,9 +218,49 @@ def postprocess_custom(det_output, w, h, batch_idx=0, interpolation_mode='biline
     boxes[:, 1], boxes[:, 3] = sanitize_coordinates(boxes[:, 1], boxes[:, 3], b_h, cast=False)
     boxes = boxes.long()
 
-    if get_full_mask:
+    if cfg.mask_type == mask_type.lincomb:
+        # At this points masks is only the coefficients
+        proto_data = dets['proto']
+
+        masks = torch.matmul(proto_data, masks.t())
+        masks = cfg.mask_proto_mask_activation(masks)
+
+        # Crop masks before upsampling because you know why
+        #if crop_masks:
+        masks = crop(masks, boxes)
+
+        # Permute into the correct output shape [num_dets, proto_h, proto_w]
+        masks = masks.permute(2, 0, 1).contiguous()
+
+        # Scale masks up to the full image
+        if cfg.preserve_aspect_ratio:
+            # Undo padding
+            masks = masks[:, :int(r_h / cfg.max_size * proto_data.size(1)),
+                    :int(r_w / cfg.max_size * proto_data.size(2))]
+        masks = F.interpolate(masks.unsqueeze(0), (h, w), mode=interpolation_mode, align_corners=False).squeeze(0)
+        # Binarize the masks
+        masks = masks.gt(0.5).float()
+
+    if cfg.mask_type == mask_type.direct:
         # Upscale masks to image size
-        masks = upscale_masks(masks, w, h, boxes, interpolation_mode)
+        full_masks = torch.zeros(masks.size(0), h, w)
+
+        for jdx in range(masks.size(0)):
+            x1, y1, x2, y2 = boxes[jdx, :]
+
+            mask_w = x2 - x1
+            mask_h = y2 - y1
+
+            # Just in case
+            if mask_w * mask_h <= 0 or mask_w < 0:
+                continue
+
+            mask = masks[jdx, :].view(1, 1, cfg.mask_size, cfg.mask_size)
+            mask = F.interpolate(mask, (mask_h, mask_w), mode=interpolation_mode, align_corners=False)
+            mask = mask.gt(0.5).float()
+            full_masks[jdx, y1:y2, x1:x2] = mask
+
+        masks = full_masks
 
     return classes, scores, boxes, masks
     
