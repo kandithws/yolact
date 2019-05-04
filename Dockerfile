@@ -20,7 +20,9 @@ RUN echo "user ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-user
 
 RUN pip3 install torch torchvision
 RUN pip3 install cython
-RUN pip3 install opencv-python pillow pycocotools matplotlib 
+RUN pip3 install opencv-python pillow pycocotools matplotlib
+RUN pip3 install --upgrade pip 
+RUN pip3 install grpcio grpcio-tools
 
 # All users can use /home/user as their home directory
 ENV HOME=/home/user

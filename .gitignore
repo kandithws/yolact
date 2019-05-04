@@ -150,3 +150,9 @@ img/
 scripts/aws-ohio/
 scripts/aws3/
 data/config_dev.py
+weights/
+.pyxbld/
+.python_history
+run_docker.sh
+run_grpc_server.sh
+

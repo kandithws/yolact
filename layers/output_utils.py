@@ -10,7 +10,7 @@ import cv2
 from data import cfg, mask_type, MEANS, STD, activation_func
 from utils.augmentations import Resize
 from utils import timer
-from .box_utils import crop, sanitize_coordinates
+from .box_utils import crop, sanitize_coordinates, center_size
 
 def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
                 visualize_lincomb=False, crop_masks=True, score_threshold=0):
@@ -28,7 +28,7 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
     Returns 4 torch Tensors (in the following order):
         - classes [num_det]: The class idx for each detection.
         - scores  [num_det]: The confidence score for each detection.
-        - boxes   [num_det, 4]: The bounding box for each detection in absolute point form.
+        - boxes   [num_det, 4]: The bounding box for each detection in absolute point form. (tl, br)
         - masks   [num_det, h, w]: Full image masks for each detection.
     """
     
@@ -132,6 +132,99 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
     return classes, scores, boxes, masks
 
 
+def upscale_masks(masks, w, h, boxes, interpolation_mode='bilinear'):
+    # Upscale masks
+    full_masks = torch.zeros(masks.size(0), h, w)
+
+    for jdx in range(masks.size(0)):
+        x1, y1, x2, y2 = boxes[jdx, :]
+
+        mask_w = x2 - x1
+        mask_h = y2 - y1
+
+        # Just in case
+        if mask_w * mask_h <= 0 or mask_w < 0:
+            continue
+
+        mask = masks[jdx, :].view(1, 1, cfg.mask_size, cfg.mask_size)
+        mask = F.interpolate(mask, (mask_h, mask_w), mode=interpolation_mode, align_corners=False)
+        mask = mask.gt(0.5).float()
+        full_masks[jdx, y1:y2, x1:x2] = mask
+
+    return full_masks
+
+
+def postprocess_custom(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
+                       get_full_mask=True,
+                       score_threshold=0):
+    """
+    Postprocesses the output of Yolact on testing mode into a format that makes sense,
+    accounting for all the possible configuration settings.
+
+    Args:
+        - det_output: The lost of dicts that Detect outputs.
+        - w: The real with of the image.
+        - h: The real height of the image.
+        - batch_idx: If you have multiple images for this batch, the image's index in the batch.
+        - interpolation_mode: Can be 'nearest' | 'area' | 'bilinear' (see torch.nn.functional.interpolate)
+
+    Returns 4 torch Tensors (in the following order):
+        - classes [num_det]: The class idx for each detection.
+        - scores  [num_det]: The confidence score for each detection.
+        - boxes   [num_det, 4]: The bounding box for each detection in absolute point form. (tl, br)
+        - masks   [num_det, h, w]: Full image masks for each detection.
+    """
+
+    dets = det_output[batch_idx]
+
+    if dets is None:
+        return [torch.Tensor()] * 4  # Warning, this is 4 copies of the same thing
+
+    if score_threshold > 0:
+        keep = dets['score'] > score_threshold
+
+        for k in dets:
+            if k != 'proto':
+                dets[k] = dets[k][keep]
+
+        if dets['score'].size(0) == 0:
+            return [torch.Tensor()] * 4
+
+    # im_w and im_h when it concerns bboxes. This is a workaround hack for preserve_aspect_ratio
+    b_w, b_h = (w, h)
+
+    # Undo the padding introduced with preserve_aspect_ratio
+    if cfg.preserve_aspect_ratio:
+        r_w, r_h = Resize.faster_rcnn_scale(w, h, cfg.min_size, cfg.max_size)
+
+        # Get rid of any detections whose centers are outside the image
+        boxes = dets['box']
+        boxes = center_size(boxes)
+        s_w, s_h = (r_w / cfg.max_size, r_h / cfg.max_size)
+
+        not_outside = ((boxes[:, 0] > s_w) + (boxes[:, 1] > s_h)) < 1  # not (a or b)
+        for k in dets:
+            if k != 'proto':
+                dets[k] = dets[k][not_outside]
+
+        # A hack to scale the bboxes to the right size
+        b_w, b_h = (cfg.max_size / r_w * w, cfg.max_size / r_h * h)
+
+    # Actually extract everything from dets now
+    classes = dets['class']
+    boxes = dets['box']
+    scores = dets['score']
+    masks = dets['mask']
+
+    boxes[:, 0], boxes[:, 2] = sanitize_coordinates(boxes[:, 0], boxes[:, 2], b_w, cast=False)
+    boxes[:, 1], boxes[:, 3] = sanitize_coordinates(boxes[:, 1], boxes[:, 3], b_h, cast=False)
+    boxes = boxes.long()
+
+    if get_full_mask:
+        # Upscale masks to image size
+        masks = upscale_masks(masks, w, h, boxes, interpolation_mode)
+
+    return classes, scores, boxes, masks
     
 
 
