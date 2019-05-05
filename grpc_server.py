@@ -48,11 +48,10 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
     # Image input type: BGR
     def DetectInstances(self, image_msg, context):
         with torch.no_grad():
-
             class_idxs, scores, boxes, masks, draw_img = self._detect(img_msg_to_array(image_msg))
-
             if self._visualize:
                 draw_img = draw_result(draw_img, class_idxs, scores, boxes)
+                cv2.imwrite('result/server_latest.jpg', draw_img)
 
         msg = grpc_msg.InstanceDetections()
         preds = []
@@ -68,10 +67,6 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
                 p.mask.CopyFrom(img_msg_from_array(mask.astype(np.bool)))
             else:
                 p.mask.CopyFrom(img_msg_from_array(mask[box[1]:box[3]+1, box[0]:box[2]+1].astype(np.bool)))
-
-            print(mask.shape)
-            cv2.imwrite('debug_server{}.jpg'.format(class_idx),
-                        mask[box[1]:box[3] + 1, box[0]:box[2] + 1].astype(np.uint8) * 255)
 
             p.mask_type = int(self._full_mask)
             preds.append(p)
