@@ -1,52 +1,27 @@
 #!/usr/bin/env python3
 import time
-import py_protos.detection_v2_pb2 as grpc_msg
 import py_protos.detection_v2_pb2_grpc as grpc
 import grpc as grpclib
-import cv2
 from concurrent import futures
-import numpy as np
 from yolact import Yolact
 from utils.augmentations import FastBaseTransform
-from layers.output_utils import postprocess, postprocess_custom, upscale_masks
+from layers.output_utils import postprocess
 import torch
 import torch.backends.cudnn as cudnn
 import argparse
 from utils.functions import SavePath
 import os
+from py_protos.common_utils import *
+from data.config import set_cfg
 
-_NUMPY_TYPES_MAP = {
-    "uint8": np.uint8,
-    "float32": np.float32,
-    'bool': np.bool
-}
 
-from data.config import COLORS, cfg, set_cfg, set_dataset
-
-def img_msg_from_array(img):
-    msg = grpc_msg.Image()
-    msg.height, msg.width, msg.channel = img.shape
-    msg.data = bytes(img.reshape(-1))
-    msg.type = img.dtype.name
-    return msg
-
-def img_msg_to_array(msg: grpc_msg.Image, swapRB=False):
-    np_data = np.frombuffer(msg.data, dtype=_NUMPY_TYPES_MAP[msg.type])
-    img = np_data.reshape((msg.height, msg.width, msg.channel))
-    if swapRB:
-        return img[:,:,::-1]
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
     else:
-        return img
-
-def get_color(j, classes):
-    color = COLORS[(classes[j] * 5) % len(COLORS)]
-    color = (color[2], color[1], color[0])
-    return color
-
-def center_size_boxes(boxes):
-    centers = (boxes[:, 2:] + boxes[:, :2])/2
-    wh = (boxes[:, 2:] - boxes[:, :2])
-    return np.concatenate((centers, wh), axis=1)
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
     def __init__(self, args):
@@ -58,7 +33,7 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
         self._top_k = args.top_k
         self._score_threshold = args.score_threshold
         self._visualize = args.visualize
-        self._full_mask = args.full_mask
+        self._full_mask = not args.cropped_mask
         print("Initializing ..", end='')
         _initimg = cv2.imread(os.path.join(os.getcwd(), 'data', 'grpc_init.png'))
 
@@ -72,20 +47,32 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
 
     # Image input type: BGR
     def DetectInstances(self, image_msg, context):
-        class_idxs, scores, boxes_points, masks, draw_img = self._detect(img_msg_to_array(image_msg))
-        # TODO: add to viz thread, now test by drawing here!
-        if self._visualize:
-            self._draw_result(draw_img, class_idxs, scores, boxes_points)
+        with torch.no_grad():
+
+            class_idxs, scores, boxes, masks, draw_img = self._detect(img_msg_to_array(image_msg))
+
+            if self._visualize:
+                draw_img = draw_result(draw_img, class_idxs, scores, boxes)
+
         msg = grpc_msg.InstanceDetections()
         preds = []
-        boxes = center_size_boxes(boxes_points)
+        boxes = boxes.astype(np.int)
 
         for class_idx, score, box, mask in zip(class_idxs, scores, boxes, masks):
             p = grpc_msg.InstanceDetection()
             p.confidence = score
             p.label_id = class_idx
-            p.mask = img_msg_from_array(mask.astype(np.bool))
-            p.box.x, p.box.y, p.box.w, p.box.h = box[0], box[1], box[2], box[3]
+            p.box.tlx, p.box.tly, p.box.brx, p.box.bry = box[0], box[1], box[2], box[3]
+
+            if self._full_mask:
+                p.mask.CopyFrom(img_msg_from_array(mask.astype(np.bool)))
+            else:
+                p.mask.CopyFrom(img_msg_from_array(mask[box[1]:box[3]+1, box[0]:box[2]+1].astype(np.bool)))
+
+            print(mask.shape)
+            cv2.imwrite('debug_server{}.jpg'.format(class_idx),
+                        mask[box[1]:box[3] + 1, box[0]:box[2] + 1].astype(np.uint8) * 255)
+
             p.mask_type = int(self._full_mask)
             preds.append(p)
 
@@ -132,37 +119,6 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
             classes, scores, boxes, masks = [x[:self._top_k].cpu().numpy() for x in t]
             return classes, scores, boxes, masks, None
 
-    # draw result on cpu, box recieved as corners
-    def _draw_result(self, predrawn_frame, classes, scores, boxes):
-        for j in reversed(range(min(self._top_k, classes.shape[0]))):
-            score = scores[j]
-
-            if scores[j] >= self._score_threshold:
-                x1, y1, x2, y2 = boxes[j, :]
-                color = get_color(j, classes)
-
-                # if args.display_bboxes:
-                cv2.rectangle(predrawn_frame, (x1, y1), (x2, y2), color, 1)
-
-
-                _class = cfg.dataset.class_names[classes[j]]
-                text_str = '%s: %.2f' % (_class, score)
-
-                font_face = cv2.FONT_HERSHEY_DUPLEX
-                font_scale = 0.6
-                font_thickness = 1
-
-                text_w, text_h = cv2.getTextSize(text_str, font_face, font_scale, font_thickness)[0]
-
-                text_pt = (x1, y1 - 3)
-                text_color = [255, 255, 255]
-
-                cv2.rectangle(predrawn_frame, (x1, y1), (x1 + text_w, y1 - text_h - 4), color, -1)
-                cv2.putText(predrawn_frame, text_str, text_pt, font_face, font_scale, text_color, font_thickness,
-                            cv2.LINE_AA)
-
-        return predrawn_frame
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -174,7 +130,7 @@ def main():
     parser.add_argument('--score_threshold', default=0.3, help='Minimum Score threshold')
     parser.add_argument('--top_k', default=100, help='Total top instances to return')
     parser.add_argument('--visualize', default=True, help='Whether to run visualization window')
-    parser.add_argument('--full_mask', default=True, help='Whether to get full mask, otherwise cropped')
+    parser.add_argument('--cropped_mask', type=str2bool, nargs="?", const=True, help='Whether to get full mask, otherwise cropped')
     parser.add_argument('--cpu', action='store_true', help='Whether to use cpu for calc')
     parser.add_argument('--config', default=None,
                         help='The config object to use.')
@@ -198,14 +154,15 @@ def main():
         grpc.add_InstanceDetectionServiceServicer_to_server(
             InstanceDetectionServiceServer(args),
             server)
-        server.add_insecure_port('[::]:50051')
-        server.start()
-        print('Starting server at localhost:50051')
-        try:
-            while True:
-                time.sleep(100)
-        except KeyboardInterrupt:
-            server.stop(0)
+
+    server.add_insecure_port('[::]:50051')
+    server.start()
+    print('Starting server at localhost:50051')
+    try:
+        while True:
+            time.sleep(100)
+    except KeyboardInterrupt:
+        server.stop(0)
 
 if __name__ == '__main__':
     main()

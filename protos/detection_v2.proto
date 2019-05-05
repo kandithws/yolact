@@ -7,13 +7,14 @@ message Image {
     uint32 channel = 3;
     string type = 4; // "uint8", "bool", "float"
     bytes data = 5;  // the actual image data, in bytes
+    bool rgb = 6; // True: RGB, False: BGR, if channels == 3
 }
 
 message BoundingBox {
-   int32 x = 1; // center
-   int32 y = 2; // center
-   int32 width = 3;
-   int32 height = 4;
+   int32 tlx = 1;
+   int32 tly = 2;
+   int32 brx = 3;
+   int32 bry = 4;
 }
 
 message InstanceDetection {
