@@ -121,8 +121,8 @@ def main():
         description='Yolact GRPC Inference server'
     )
     parser.add_argument('--model_weight', required=True,help='Path to .pth weight')
-    parser.add_argument('--use_fast_nms', default=False, help='Use fast (coarse) NMS')
-    parser.add_argument('--score_threshold', default=0.3, help='Minimum Score threshold')
+    parser.add_argument('--use_fast_nms', type=str2bool, nargs="?", const=True, help='Use fast (coarse) NMS')
+    parser.add_argument('--score_threshold', default=0.3, type=float, help='Minimum Score threshold')
     parser.add_argument('--top_k', default=100, help='Total top instances to return')
     parser.add_argument('--visualize', default=True, help='Whether to run visualization window')
     parser.add_argument('--cropped_mask', type=str2bool, nargs="?", const=True, help='Whether to get full mask, otherwise cropped')

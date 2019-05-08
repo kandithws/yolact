@@ -28,6 +28,14 @@ class PredictedObject {
     inline cv::Point2f GetBoxCentroid() const {
         return (_bbox.tl() + _bbox.br()) * 0.5;
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const PredictedObject& pred){
+        os << "PredObj{  label: " << pred._label << " , conf: " 
+           << pred._confidence << "\n   box: [" 
+           << pred._bbox << "], mask: " << static_cast<int>(pred._mask_type) 
+           << " }";
+        return os;
+    }
 };
 
 PredictedObject::PredictedObject(const int &label, const float &conf, const cv::Rect &box)
@@ -49,7 +57,7 @@ class DetectionV2Client {
             : stub_(detection_service_v2::InstanceDetectionService::NewStub(channel)) {}
 
     detection_service_v2::Image toImageRequest(const cv::Mat &img, bool rgb = true) {
-        auto img_msg = detection_service_v2::Image();
+        detection_service_v2::Image img_msg;
         // TODO -- assert CV Type,
         img_msg.set_channel(3);
         size_t size = img.total() * img.elemSize();
@@ -57,6 +65,7 @@ class DetectionV2Client {
         img_msg.set_height(img.rows);
         img_msg.set_width(img.cols);
         img_msg.set_type("uint8"); // TO FIX
+        img_msg.set_rgb(rgb);
         return img_msg;
     };
 
