@@ -48,7 +48,9 @@ class InstanceDetectionServiceServer(grpc.InstanceDetectionServiceServicer):
     # Image input type: BGR
     def DetectInstances(self, image_msg, context):
         with torch.no_grad():
+            start_t = time.time()
             class_idxs, scores, boxes, masks, draw_img = self._detect(img_msg_to_array(image_msg))
+            print('Total Time: {}'.format(time.time() - start_t))
             if self._visualize:
                 draw_img = draw_result(draw_img, class_idxs, scores, boxes)
                 cv2.imwrite('result/server_latest.jpg', draw_img)
@@ -124,7 +126,7 @@ def main():
     parser.add_argument('--use_fast_nms', type=str2bool, nargs="?", const=True, help='Use fast (coarse) NMS')
     parser.add_argument('--score_threshold', default=0.3, type=float, help='Minimum Score threshold')
     parser.add_argument('--top_k', default=100, help='Total top instances to return')
-    parser.add_argument('--visualize', default=True, help='Whether to run visualization window')
+    parser.add_argument('--visualize', default=False, type=str2bool, help='Whether to run visualization window')
     parser.add_argument('--cropped_mask', type=str2bool, nargs="?", const=True, help='Whether to get full mask, otherwise cropped')
     parser.add_argument('--cpu', action='store_true', help='Whether to use cpu for calc')
     parser.add_argument('--config', default=None,
